@@ -23,14 +23,7 @@ struct beacon_frame{
 typedef struct{
     uint8_t tag_number;
     uint8_t tag_length;
-    uint8_t ssid[6];
-
-} Tag_SSID;
-
-typedef struct{
-    uint8_t tag_number;
-    uint8_t tag_length;
-    uint8_t ssid[6];
+    uint8_t ssid[];
 
 } Tag_SSID;
 
@@ -72,10 +65,7 @@ typedef struct{
 
 // wireless management 구조체
 struct wireless_management{
-    uint8_t tag_number;
-    uint8_t tag_length;
-    uint16_t beacon_interval;
-    uint16_t capability_information;
+    uint8_t fixed_parameter[12];
     Tag_SSID SSID;
     Tag_Supported_Rates Rates;
     Tag_DS DS;
@@ -195,6 +185,25 @@ void find_bssid(const struct pcap_pkthdr *header, const u_char *packet) {
     printf("\n");
 }
 
+void find_wireless(const struct pcap_pkthdr *header, const u_char *packet) 
+{
+    struct radiotap_header *radio_hdr = (struct radiotap_header *)packet;
+    int offset = radio_hdr->len;
+    
+    struct wireless_management *wl_mg = (struct wireless_management *)(packet + offset + 24); // 24는 비콘프레임의 fix값
+    // printf("wireless version: %x\n",wl_mg->version);
+    Tag_SSID * SSID = &(wl_mg->SSID);
+    uint8_t *ssid = SSID->ssid;
+    int ssid_length = SSID->tag_length;
+    printf("ssid:");
+    for(int i=0; i<ssid_length; i++){
+        printf("%c", ssid[i]);
+
+    }
+    printf("\n");
+
+}
+
 int main(int argc, char *argv[]) {
     char errbuf[PCAP_ERRBUF_SIZE];
     pcap_t *handle;
@@ -228,6 +237,7 @@ int main(int argc, char *argv[]) {
             int pwr = (int)signal_strength;
             printf("pwr %d\n", pwr);
             find_bssid(header, packet);
+            find_wireless(header, packet);
         }
     }
 
