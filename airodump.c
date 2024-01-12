@@ -185,7 +185,9 @@ void find_bssid(const struct pcap_pkthdr *header, const u_char *packet) {
     printf("\n");
 }
 
-void find_wireless(const struct pcap_pkthdr *header, const u_char *packet) 
+
+
+void find_wireless_static(const struct pcap_pkthdr *header, const u_char *packet) 
 {
     struct radiotap_header *radio_hdr = (struct radiotap_header *)packet;
     int offset = radio_hdr->len;
@@ -201,6 +203,23 @@ void find_wireless(const struct pcap_pkthdr *header, const u_char *packet)
 
     }
     printf("\n");
+}
+
+void find_wireless_dynamic(const struct pcap_pkthdr *header, const u_char *packet) 
+{
+    struct radiotap_header *radio_hdr = (struct radiotap_header *)packet;
+    int offset = radio_hdr->len;
+
+    uint8_t *wireless_tagged_frame = (uint8_t *)(packet + offset + 24 + 12);
+    Tag_SSID * ssid = (Tag_SSID *)wireless_tagged_frame;
+    wireless_tagged_frame += (2 + ssid->tag_length);
+
+    Tag_Supported_Rates * rates = (Tag_Supported_Rates *)wireless_tagged_frame;
+    wireless_tagged_frame += (2 + rates->tag_length);
+
+    Tag_DS * ds = (Tag_DS *)wireless_tagged_frame;
+    uint8_t channel = ds->channel;
+    printf("channel: %x\n", channel);
 
 }
 
@@ -237,7 +256,8 @@ int main(int argc, char *argv[]) {
             int pwr = (int)signal_strength;
             printf("pwr %d\n", pwr);
             find_bssid(header, packet);
-            find_wireless(header, packet);
+            find_wireless_static(header, packet);
+            find_wireless_dynamic(header, packet);
         }
     }
 
