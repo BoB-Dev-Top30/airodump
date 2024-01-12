@@ -1,6 +1,7 @@
 #include <pcap.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 // radio 헤더 구조체
 struct radiotap_header {
@@ -41,18 +42,25 @@ typedef struct{
     uint8_t channel;
 
 } Tag_DS;
-
 typedef struct{
     uint8_t tag_number;
     uint8_t tag_length;
     uint16_t rsn_version;
     uint32_t group_cipher; // 그룹 암호화 알고리즘
     uint16_t pairwise_cipher_count; // 페어와이즈 암호화 알고리즘의 수
-    uint32_t pairwise_cipher_list; // 페어와이즈 암호화 알고리즘 리스트
+}Tag_RSN_Information_Front;
+
+// 전반부와 후반부를 나눈 이유는 가변길이가 중간에 하나 섞이기 때문이다.
+
+typedef struct{
+    uint32_t * pairwise_cipher_list; // 페어와이즈 암호화 알고리즘 리스트(가변길이)
     uint16_t auth_key_mngt_count; // 인증 방법의 수
-    uint32_t auth_key_mngt_list; // 인증 방법 리스트
+} Tag_RSN_Information_Middle;
+
+typedef struct{
+    uint32_t * auth_key_mngt_list; // 인증 방법 리스트(가변길이)
     uint16_t rsn_capabilities; // RSN 능력
-} Tag_RSN_Information;
+} Tag_RSN_Information_Back;
 
 typedef struct{
     uint8_t tag_number;
@@ -62,6 +70,20 @@ typedef struct{
 
 } Tag_Extended_Supported_Rates;
 
+typedef struct{
+    uint8_t tag_number;
+    uint8_t tag_length;
+    uint8_t DTIM_count;
+    uint8_t DTIM_period;
+    uint8_t bitmap;
+    uint8_t virtual_bitmap[]; // 가변
+} Tag_Traffic_Indication_Map;
+
+typedef struct{
+    uint8_t tag_number;
+    uint8_t tag_length;
+    uint8_t erp_information;
+} Tag_ERP_Information;
 
 // wireless management 구조체
 struct wireless_management{
@@ -69,9 +91,15 @@ struct wireless_management{
     Tag_SSID SSID;
     Tag_Supported_Rates Rates;
     Tag_DS DS;
-    uint8_t traffic_inication_map[11];
-    uint8_t ERP[3];
+    Tag_Traffic_Indication_Map TIM;
+    Tag_ERP_Information ERP_INFO;
     Tag_Extended_Supported_Rates E_Rates;
+    uint8_t ht_capabilities[28]; //고정
+    uint8_t ht_information[24]; //고정
+    Tag_RSN_Information_Front r_f;
+    Tag_RSN_Information_Middle r_m;
+    Tag_RSN_Information_Back r_b;
+
 };
 
 // 비콘 여부 판별
@@ -205,6 +233,44 @@ void find_wireless_static(const struct pcap_pkthdr *header, const u_char *packet
     printf("\n");
 }
 
+void print_cipher_type(uint32_t cipher){
+    switch(cipher){
+        case 0x01ac0f00: printf("WEP-40\n"); break;
+        case 0x02ac0f00: printf("TKIP\n"); break;
+        case 0x03ac0f00: printf("WRAP\n"); break;
+        case 0x04ac0f00: printf("CCMP\n"); break;
+        case 0x05ac0f00: printf("WEP-104\n"); break;
+        default: printf("Unknown\n"); break;
+    }
+}
+
+void print_auth_type(uint32_t auth){
+    switch(auth){
+        case 0x01ac0f00: printf("802.1X/WPA\n"); break;
+        case 0x02ac0f00: printf("PSK/WPA2\n"); break;
+        case 0x03ac0f00: printf("FT/802.1X\n"); break;
+        case 0x04ac0f00: printf("FT/PSK\n"); break;
+        case 0x05ac0f00: printf("802.1X/WPA2\n"); break;
+        case 0x06ac0f00: printf("PSK/WPA2\n"); break;
+        default: printf("Unknown\n"); break;
+    }
+}
+
+int Is_RSN(const struct pcap_pkthdr *header, const u_char *packet, uint8_t *wireless_tagged_frame) 
+{
+    Tag_RSN_Information_Front * rsn_f = (Tag_RSN_Information_Front *)wireless_tagged_frame;
+    printf("rsn_tag_number:%d\n", rsn_f->tag_number);
+    if(rsn_f->tag_number ==48)
+    {
+        return 1;
+    }
+    else{
+        return 0;
+    }
+}
+
+
+
 void find_wireless_dynamic(const struct pcap_pkthdr *header, const u_char *packet) 
 {
     struct radiotap_header *radio_hdr = (struct radiotap_header *)packet;
@@ -220,6 +286,75 @@ void find_wireless_dynamic(const struct pcap_pkthdr *header, const u_char *packe
     Tag_DS * ds = (Tag_DS *)wireless_tagged_frame;
     uint8_t channel = ds->channel;
     printf("channel: %x\n", channel);
+    wireless_tagged_frame += (2 + ds->tag_length);
+
+    Tag_Traffic_Indication_Map * tim = (Tag_Traffic_Indication_Map *)wireless_tagged_frame;
+    wireless_tagged_frame += (2 + tim->tag_length);
+
+    Tag_ERP_Information * erp = (Tag_ERP_Information *)wireless_tagged_frame;
+    wireless_tagged_frame += (2 + erp->tag_length);
+
+    Tag_Extended_Supported_Rates * esr = (Tag_Extended_Supported_Rates *)wireless_tagged_frame;
+    wireless_tagged_frame += (2 + esr->tag_length);
+    
+    wireless_tagged_frame += 52;//고정길이
+
+    if(Is_RSN(header, packet, wireless_tagged_frame)){
+    // 맨첫번째
+    Tag_RSN_Information_Front * rsn_f = (Tag_RSN_Information_Front *)wireless_tagged_frame;
+    int pairwise_count = rsn_f->pairwise_cipher_count;
+    uint32_t EncandCipher = rsn_f->group_cipher;
+    printf("group_cipherinfo : %02x\n", EncandCipher);
+    print_cipher_type(EncandCipher);
+    printf("pairwise count: %d\n", pairwise_count);
+    wireless_tagged_frame += 10;//고정길이
+
+    //중간
+    Tag_RSN_Information_Middle *rsn_m;
+    rsn_m = (Tag_RSN_Information_Middle *)malloc(sizeof(Tag_RSN_Information_Middle));
+    rsn_m->pairwise_cipher_list = (uint32_t *)malloc(sizeof(uint32_t) * pairwise_count);
+    memcpy(rsn_m->pairwise_cipher_list, wireless_tagged_frame, sizeof(uint32_t) * pairwise_count);
+    
+    for(int i=0; i<pairwise_count; i++){
+        printf("pairwise_cipherinfo:%x\n", rsn_m->pairwise_cipher_list[i]);
+    }
+    wireless_tagged_frame += (pairwise_count * 4); 
+
+    memcpy(&rsn_m->auth_key_mngt_count, wireless_tagged_frame, sizeof(uint16_t));
+    int auth_key_mngt_count = rsn_m->auth_key_mngt_count;
+    printf("auth_key count : %d\n", auth_key_mngt_count);
+    wireless_tagged_frame += 2;
+
+    //끝
+    
+    Tag_RSN_Information_Back *rsn_b;
+    rsn_b = (Tag_RSN_Information_Back *)malloc(sizeof(Tag_RSN_Information_Back));
+    rsn_b->auth_key_mngt_list = (uint32_t *)malloc(sizeof(uint32_t) * auth_key_mngt_count);
+    memcpy(rsn_b->auth_key_mngt_list, wireless_tagged_frame, sizeof(uint32_t) * auth_key_mngt_count);
+
+    for(int i=0; i<auth_key_mngt_count; i++){
+        printf("authinfo:%x\n", rsn_b->auth_key_mngt_list[i]);
+        print_auth_type(rsn_b->auth_key_mngt_list[i]);
+    }
+    
+    }
+
+    
+
+    /*
+    Tag_SSID * SSID = &(wl_mg->SSID);
+    uint8_t *ssid = SSID->ssid;
+    int ssid_length = SSID->tag_length;
+    printf("ssid:");
+    for(int i=0; i<ssid_length; i++){
+        printf("%c", ssid[i]);
+
+    }
+    printf("\n");
+    
+    wireless_tagged_frame += (2 + rsn->tag_length);
+    */
+
 
 }
 
