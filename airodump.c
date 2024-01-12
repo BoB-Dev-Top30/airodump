@@ -9,6 +9,81 @@ struct radiotap_header {
     uint16_t len;
 };
 
+// beacon 프레임 구조체
+struct beacon_frame{
+    uint8_t beacon_frame;
+    uint8_t flags;
+    uint16_t duration;
+    uint8_t destination_address[6];
+    uint8_t source_address[6];
+    uint8_t bss_id[6];
+    uint16_t fragment_sequence_number; // 한꺼번에
+};
+
+typedef struct{
+    uint8_t tag_number;
+    uint8_t tag_length;
+    uint8_t ssid[6];
+
+} Tag_SSID;
+
+typedef struct{
+    uint8_t tag_number;
+    uint8_t tag_length;
+    uint8_t ssid[6];
+
+} Tag_SSID;
+
+typedef struct{
+    uint8_t tag_number;
+    uint8_t tag_length;
+    uint8_t rates[];
+    // supported rates가 가변길이여서 뒤는 length 보고 결정된다. 여기랑 extended에서 최댓값 구해야함 
+
+} Tag_Supported_Rates;
+
+typedef struct{
+    uint8_t tag_number;
+    uint8_t tag_length;
+    uint8_t channel;
+
+} Tag_DS;
+
+typedef struct{
+    uint8_t tag_number;
+    uint8_t tag_length;
+    uint16_t rsn_version;
+    uint32_t group_cipher; // 그룹 암호화 알고리즘
+    uint16_t pairwise_cipher_count; // 페어와이즈 암호화 알고리즘의 수
+    uint32_t pairwise_cipher_list; // 페어와이즈 암호화 알고리즘 리스트
+    uint16_t auth_key_mngt_count; // 인증 방법의 수
+    uint32_t auth_key_mngt_list; // 인증 방법 리스트
+    uint16_t rsn_capabilities; // RSN 능력
+} Tag_RSN_Information;
+
+typedef struct{
+    uint8_t tag_number;
+    uint8_t tag_length;
+    uint8_t rates[];
+    // supported rates가 가변길이여서 뒤는 length 보고 결정된다. 여기랑 extended에서 최댓값 구해야함 
+
+} Tag_Extended_Supported_Rates;
+
+
+// wireless management 구조체
+struct wireless_management{
+    uint8_t tag_number;
+    uint8_t tag_length;
+    uint16_t beacon_interval;
+    uint16_t capability_information;
+    Tag_SSID SSID;
+    Tag_Supported_Rates Rates;
+    Tag_DS DS;
+    uint8_t traffic_inication_map[11];
+    uint8_t ERP[3];
+    Tag_Extended_Supported_Rates E_Rates;
+};
+
 // 비콘 여부 판별
 int process_packet(const struct pcap_pkthdr *header, const u_char *packet) {
     struct radiotap_header *radio_hdr = (struct radiotap_header *)packet;
@@ -65,6 +140,8 @@ int getFieldLength(uint32_t presentFlags, int field) {
     return length;
 }
 
+
+
 int find_signal_strength(const struct pcap_pkthdr *header, const u_char *packet) {
     struct radiotap_header *radio_hdr = (struct radiotap_header *)packet;
     int offset = radio_hdr->len;
@@ -100,15 +177,22 @@ int find_signal_strength(const struct pcap_pkthdr *header, const u_char *packet)
 
     return target;
 }
-int convertSignalStrength(char signal_strength) {
-    int result = (int)signal_strength;
-    
-    // 만약 signal_strength가 음수라면 2의 보수를 취해서 양수로 변환
-    if (signal_strength < 0) {
-        result = ~result + 1;
-    }
 
-    return result;
+void find_bssid(const struct pcap_pkthdr *header, const u_char *packet) {
+    struct radiotap_header *radio_hdr = (struct radiotap_header *)packet;
+    int offset = radio_hdr->len;
+    
+    struct beacon_frame *beacon_fr = (struct beacon_frame *)(packet+offset);
+    
+    printf("beaconframe %x\n", beacon_fr->beacon_frame);
+    uint8_t *bssid = beacon_fr->bss_id;
+    for(int i=0; i<=5; i++){
+        printf("%02x", bssid[i]);
+        if (i != 5) {
+            printf(":");
+        }
+    }
+    printf("\n");
 }
 
 int main(int argc, char *argv[]) {
@@ -143,6 +227,7 @@ int main(int argc, char *argv[]) {
             char signal_strength = find_signal_strength(header, packet);
             int pwr = (int)signal_strength;
             printf("pwr %d\n", pwr);
+            find_bssid(header, packet);
         }
     }
 
