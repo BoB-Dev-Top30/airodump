@@ -3,6 +3,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h> // sleep 함수를 위해 필요
+#include <sys/types.h>
+#include <sys/wait.h>
 
 // airodump 출력용 비콘 프레임 구조체
 
@@ -541,9 +543,21 @@ void printData(struct airodump_beacon *wlan_data, int start_num, struct airodump
     }
 }
 
+void set_channel(char *interface, int channel) {
+    char command[100];
+
+    sprintf(command, "iw dev %s set channel %d", interface, channel);
+    system(command);
+}
+
+void start_monitor_mode(char *interface) {
+    char command[100];
+
+    sprintf(command, "sudo gmon %s", interface);
+    system(command);
+}
 
 int main(int argc, char *argv[]) {
-
     char errbuf[PCAP_ERRBUF_SIZE];
     pcap_t *handle;
 
@@ -551,42 +565,48 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "Usage: %s <interface>\n", argv[0]);
         return 2;
     }
+    start_monitor_mode(argv[1]);
 
-    // 사용자가 지정한 네트워크 인터페이스 열기
-    // handle = pcap_open_offline("test_beacon.pcapng", errbuf); // 현재 디렉터리의 "test_beacon.pcap" 파일 열기
-    handle = pcap_open_live(argv[1], BUFSIZ, 1, 1000000, errbuf);
-    if (handle == NULL) {
-        fprintf(stderr, "Couldn't open file 'test_beacon.pcapng': %s\n", errbuf);
-        return 2;
-    }
+    int current_channel = 1; // 시작 채널
+    const int max_channel = 11; // 최대 채널 번호
 
+    while(1){
 
+        set_channel(argv[1], current_channel);
+        // 사용자가 지정한 네트워크 인터페이스 열기
+        // handle = pcap_open_offline("dot11-sample.pcap", errbuf); // 현재 디렉터리의 "test_beacon.pcap" 파일 열기
+        handle = pcap_open_live(argv[1], BUFSIZ, 1, 1000, errbuf);
+        if (handle == NULL) {
+            fprintf(stderr, "Couldn't open file 'test_beacon.pcapng': %s\n", errbuf);
+            return 2;
+        }
 
-    struct airodump_beacon * wlan_data=NULL; // 0으로 초기화
-    // int size = sizeof(wlan_data) /sizeof(wlan_data[0]);
+        struct airodump_beacon * wlan_data=NULL; // 0으로 초기화
+        // struct airodump_beacon * wlan_data=malloc(sizeof(struct airodump_beacon));
+        // int size = sizeof(wlan_data) /sizeof(wlan_data[0]);
 
-    int wlan_data_size = 0; // 추가: 할당된 배열의 크기를 추적하는 변수
-    struct airodump_probe * wlan_data1=NULL; // 0으로 초기화
-    // int size1 = sizeof(wlan_data1) /sizeof(wlan_data1[0]);
+        int wlan_data_size = 0; // 추가: 할당된 배열의 크기를 추적하는 변수
+        struct airodump_probe * wlan_data1=NULL; // 0으로 초기화
+        // struct airodump_probe * wlan_data1=malloc(sizeof(struct airodump_probe));
+        // int size1 = sizeof(wlan_data1) /sizeof(wlan_data1[0]);
 
-    int wlan_data_size2 = 0; // 추가: 할당된 배열의 크기를 추적하는 변수
-    int start_num=0;
-    int start_num2=0;
+        int wlan_data_size2 = 0; // 추가: 할당된 배열의 크기를 추적하는 변수
+        int start_num=0;
+        int start_num2=0;
     
-    while (1) {
-        const u_char *packet;
-        struct pcap_pkthdr *header;
-        int res = pcap_next_ex(handle, &header, &packet);
+        while (1) {
+            const u_char *packet;
+            struct pcap_pkthdr *header;
+            int res = pcap_next_ex(handle, &header, &packet);
         if (res == 0)
             continue; // 타임아웃 발생
-        if (res == -1) {
-            fprintf(stderr, "pcap_next_ex failed: %s\n", pcap_geterr(handle));
+        if (res == -1 || res == -2) {
+            fprintf(stderr, "End of pcap file or  pcap_next_ex failed: %s\n", pcap_geterr(handle));
             break;
         }
 
         int IS_beacon = process_packet(header, packet);
         if (IS_beacon==1) {
-            wlan_data_size +=1;
             /*
             wlan_data = realloc(wlan_data, (wlan_data_size) * sizeof(struct airodump_beacon));
             wlan_data_size +=1;
@@ -595,13 +615,18 @@ int main(int argc, char *argv[]) {
                 exit(1);
             }
             */
-            struct airodump_beacon *temp_wlan_data = realloc(wlan_data, wlan_data_size * sizeof(struct airodump_beacon));
+            struct airodump_beacon *temp_wlan_data = realloc(wlan_data, (wlan_data_size+1) * sizeof(struct airodump_beacon));
+            
             if (!temp_wlan_data) {
                 fprintf(stderr, "메모리 재할당 실패\n");
-                free(wlan_data);  // 기존 메모리 해제
+                if (wlan_data != NULL) {
+                    free(wlan_data);  // 기존 메모리 해제
+                    wlan_data = NULL;
+                }
                 exit(1);
             }
             wlan_data = temp_wlan_data;
+            wlan_data_size +=1;
 
             char signal_strength = find_signal_strength(header, packet);
             int pwr = (int)signal_strength;
@@ -629,13 +654,17 @@ int main(int argc, char *argv[]) {
                     wlan_data[i].PWR = pwr;
                     wlan_data[i].BEACONS+=1;
                     wlan_data[i].CH=channel;
-                    wlan_data[start_num].ESSID = (uint8_t*)malloc(ssid_length + 1);
-                    if (wlan_data[start_num].ESSID == NULL) {
+                    if(wlan_data[i].ESSID != NULL) {
+                        free(wlan_data[i].ESSID); // 기존 ESSID 해제
+                        wlan_data[i].ESSID = NULL;
+                    }
+                    wlan_data[i].ESSID = (uint8_t*)malloc(ssid_length + 1);
+                    if (wlan_data[i].ESSID == NULL) {
                         fprintf(stderr, "메모리 할당 실패\n");
                         return 1;
                         }
                     memcpy(wlan_data[i].ESSID, essid, ssid_length);
-                    wlan_data[start_num].ESSID[ssid_length] = '\0'; // 문자열의 끝에 널 문자 추가
+                    wlan_data[i].ESSID[ssid_length] = '\0'; // 문자열의 끝에 널 문자 추가
                     found=1;
                     break;
                     
@@ -649,6 +678,10 @@ int main(int argc, char *argv[]) {
                     wlan_data[start_num].PWR = pwr;
                     wlan_data[start_num].BEACONS= 1;
                     wlan_data[start_num].CH=channel;
+                    if(wlan_data[start_num].ESSID != NULL) { // 추가
+                        free(wlan_data[start_num].ESSID); // 기존 ESSID 해제
+                        wlan_data[start_num].ESSID = NULL;
+                    }
                     wlan_data[start_num].ESSID = (uint8_t*)malloc(ssid_length + 1);
                     if (wlan_data[start_num].ESSID == NULL) {
                         fprintf(stderr, "메모리 할당 실패\n");
@@ -671,14 +704,15 @@ int main(int argc, char *argv[]) {
                 fprintf(stderr, "메모리 재할당 실패\n");
                 exit(1);
             }*/
-            wlan_data_size2++;
-            struct airodump_probe *temp_wlan_data2 = realloc(wlan_data1, wlan_data_size2 * sizeof(struct airodump_probe));
+            
+            struct airodump_probe *temp_wlan_data2 = realloc(wlan_data1, (wlan_data_size2+1) * sizeof(struct airodump_probe));
             if (!temp_wlan_data2) {
                 fprintf(stderr, "메모리 재할당 실패\n");
                 free(wlan_data1);  // 기존 메모리 해제
                 exit(1);
             }
             wlan_data1 = temp_wlan_data2;
+            wlan_data_size2++;
 
             char signal_strength = find_signal_strength(header, packet);
             int pwr = (int)signal_strength;
@@ -699,30 +733,30 @@ int main(int argc, char *argv[]) {
             int probe_length;
             uint8_t * probe = find_wireless_static(header, packet, &probe_length);
 
-
-
             int found=0;
             for (int i=0; i<start_num2; i++){
-                
                 // i값 증가
                 if(check_same_elements(wlan_data1[i].STATION, station, 6)==0) {
                     printf("%d와 STATION가 동일합니다. 따라서 업데이트 진행합니다.\n",i);
                     memcpy(wlan_data1[i].BSSID, bssid, 6);
                     wlan_data1[i].PWR = pwr;
                     wlan_data1[i].Frames+=1;
-                    wlan_data1[start_num2].PROBE = (uint8_t*)malloc(probe_length + 1);
-                    if (wlan_data1[start_num2].PROBE == NULL) {
+                    if(wlan_data1[i].PROBE != NULL) {
+                        free(wlan_data1[i].PROBE); // 기존 PROBE 해제
+                        wlan_data1[i].PROBE = NULL;
+                    }
+                    wlan_data1[i].PROBE = (uint8_t*)malloc(probe_length + 1);
+                    if (wlan_data1[i].PROBE == NULL) {
                         fprintf(stderr, "메모리 할당 실패\n");
                         return 1;
                     }
                     memcpy(wlan_data1[i].PROBE, probe, probe_length);
-                    wlan_data1[start_num2].PROBE[probe_length] = '\0'; // 문자열의 끝에 널 문자 추가
+                    wlan_data1[i].PROBE[probe_length] = '\0'; // 문자열의 끝에 널 문자 추가
                     found=1;
                     break;
                     
                 }
             }
-
                 // start_num 증가
                 if (!found && start_num2 < wlan_data_size2) {
                     printf("STATION가 동일하지 않기에 새롭게 만듭니다.\n");
@@ -730,6 +764,10 @@ int main(int argc, char *argv[]) {
                     memcpy(wlan_data1[start_num2].BSSID, bssid, 6);
                     wlan_data1[start_num2].PWR = pwr;
                     wlan_data1[start_num2].Frames= 1;
+                    if(wlan_data1[start_num2].PROBE != NULL) { 
+                        free(wlan_data1[start_num2].PROBE); // 기존 PROBE 해제
+                        wlan_data1[start_num2].PROBE = NULL;
+                    }
                     wlan_data1[start_num2].PROBE = (uint8_t*)malloc(probe_length + 1);
                     if (wlan_data1[start_num2].PROBE == NULL) {
                         fprintf(stderr, "메모리 할당 실패\n");
@@ -740,181 +778,40 @@ int main(int argc, char *argv[]) {
                     start_num2+=1;
                 }
 
-
         }
-        /*    
-        printf("BSSID             PWR Beacons CH   ESSID\n");
-        for(int i=0; i<start_num; i++){
-                for(int j=0; j<6; j++) {
-                    printf("%02x", wlan_data[i].BSSID[j]);
-                     if (j != 5) {
-                        printf(":");
-                    }
-                }
-                printf(" %d", wlan_data[i].PWR);
-                printf("   %d", wlan_data[i].BEACONS);
-                printf("      %d", wlan_data[i].CH);
-                printf("   %s\n", wlan_data[i].ESSID);
-            
-            }
-
-            printf("\n\n\n");
-
-            printf("BSSID             STATION PWR FRAMES   PROBES\n");
-            for(int i=0; i<start_num2; i++){
-                for(int j=0; j<6; j++) {
-                    printf("%02x", wlan_data1[i].BSSID[j]);
-                     if (j != 5) {
-                        printf(":");
-                    }
-                }
-                for(int j=0; j<6; j++) {
-                    printf("%02x", wlan_data1[i].STATION[j]);
-                     if (j != 5) {
-                        printf(":");
-                    }
-                }
-                printf(" %d", wlan_data1[i].PWR);
-                printf("   %d", wlan_data1[i].Frames);
-                printf("   %s\n", wlan_data1[i].PROBE);
-            
-            }
-            
-            
-*/
 
     printData(wlan_data, start_num, wlan_data1, start_num2);
 
-    sleep(1);// 실시간 업데이트를 위해 일정 시간 동안 대기
     }
 
-
     for (int i = 0; i < start_num; i++) {
-        free(wlan_data[i].ESSID);
+        if (wlan_data[i].ESSID != NULL) {
+            free(wlan_data[i].ESSID);
+            wlan_data[i].ESSID = NULL;
+        }
+    }
+    if (wlan_data != NULL) {
+        free(wlan_data);
+        wlan_data = NULL;
     }
 
     for (int i = 0; i < start_num2; i++) {
+        if (wlan_data1[i].PROBE != NULL) {
         free(wlan_data1[i].PROBE);
+        wlan_data1[i].PROBE = NULL;
     }
-    // 종료
+    }
+    if (wlan_data1 != NULL) {
+        free(wlan_data1);
+        wlan_data1 = NULL;
+    }
     pcap_close(handle);
+
+    current_channel++;
+    if (current_channel > 13) { // 대부분의 지역에서 사용 가능한 와이파이 채널은 1~13번입니다.
+            current_channel = 1;
+    }
+    sleep(1);
+    }
     return 0;
 }
-
-
-/*#include <pcap.h>
-#include <stdio.h>
-#include <stdlib.h>
-
-//radio 헤더 구조체
-struct radiotap_header {
-    uint8_t version;
-    uint8_t pad;
-    uint16_t len;
-
-};
-
-// 비콘 여부 판별
-int process_packet(const struct pcap_pkthdr *header, const u_char *packet) {
-
-    struct radiotap_header * radio_hdr = (struct radiotap_header *)packet;
-
-    uint16_t radiotap_header_length = radio_hdr->len;
-
-    u_char type_subtype = packet[radiotap_header_length];
-    u_char type = (type_subtype & 0x0C)>>2; // 타입 필드
-    u_char subtype = (type_subtype & 0xF0)>>4; // 서브타입 필드
-
-    if (type == 0 && subtype == 8) 
-    { 
-        printf("Beacon Frame Captured\n");
-        return 1;
-    }
-    else{
-        return 0;
-    }
-}
-
-//pwr구하기 위한 길이조정 함수
-int getFieldLength(uint32_t presentFlags, int field) {
-    int length = 0;
-
-    // TSFT, Flags, Rate, Channel, FHSS, dBm Antenna Signal 등 필드의 길이를 처리
-    if (presentFlags & (1 << field)) {
-        switch (field) {
-            case 0: length += 8; break; // TSFT
-            case 1: length += 1; break; // Flags
-            case 2: length += 1; break; // Rate
-            case 3: length += 4; break; // Channel
-            case 4: length += 2; break; // FHSS
-            // 다른 필드에 대한 길이 처리 추가
-            case 5: length += 1; break; // dBm Antenna Signal
-            // ...
-        }
-    }
-    return length;
-}
-
-
-int find_signal_strength(const struct pcap_pkthdr *header, const u_char *packet){
-    
-    struct radiotap_header * radio_hdr = (struct radiotap_header *)packet;
-
-
-    int offset = radio_hdr->len;
-    printf("len:%d\n", offset);
-    int signal_strength = 0;
-
-    uint32_t present = *(uint32_t*)(packet + offset);
-
-    present = ((present >> 24) & 0x000000ff) |
-              ((present >> 8) & 0x0000ff00) |
-              ((present << 8) & 0x00ff0000) |
-              ((present << 24) & 0xff000000);
-
-    printf("firstaddress 0x%x\n", present);
-
-    return signal_strength;
-}
-
-int main(int argc, char *argv[]) {
-    char errbuf[PCAP_ERRBUF_SIZE];
-    pcap_t *handle;
-    
-
-    if (argc != 2) {
-        fprintf(stderr, "Usage: %s <interface>\n", argv[0]);
-        return 2;
-    }
-
-    // 사용자가 지정한 네트워크 인터페이스 열기
-    handle = pcap_open_live(argv[1], BUFSIZ, 1, 1000, errbuf);
-    if (handle == NULL) {
-        fprintf(stderr, "Couldn't open device %s: %s\n", argv[1], errbuf);
-        return 2;
-    }
-
-    while (1) {
-        const u_char *packet;
-        struct pcap_pkthdr *header;
-        int res = pcap_next_ex(handle, &header, &packet);
-        if (res == 0) continue; // 타임아웃 발생
-        if (res == -1) {
-            fprintf(stderr, "pcap_next_ex failed: %s\n", pcap_geterr(handle));
-            break;
-        }
-
-        int IS_beacon = process_packet(header, packet);
-        if(IS_beacon){
-            int signal_strength = find_signal_strength(header, packet);
-            printf("pwr %d\n", signal_strength);
-
-        }
-
-    }
-
-    // 종료
-    pcap_close(handle);
-    return 0;
-}
-*/
