@@ -5,140 +5,9 @@
 #include <unistd.h> // sleep 함수를 위해 필요
 #include <sys/types.h>
 #include <sys/wait.h>
+#include "airodump.h" // 내가 정의한 헤더파일
 
-// airodump 출력용 비콘 프레임 구조체
-
-struct airodump_beacon{
-    uint8_t BSSID [6];
-    int PWR;
-    int BEACONS;
-    uint8_t CH;
-    uint8_t *ESSID; //가변
-};
-
-
-// airodump 출력용 probe 프레임 구조체
-struct airodump_probe{
-    uint8_t BSSID [6];
-    uint8_t STATION [6];
-    int PWR;
-    int Frames;
-    uint8_t *PROBE; //가변
-};
-
-
-// radio 헤더 구조체
-struct radiotap_header {
-    uint8_t version;
-    uint8_t pad;
-    uint16_t len;
-};
-
-// beacon 프레임 구조체
-struct beacon_frame{
-    uint8_t beacon_frame;
-    uint8_t flags;
-    uint16_t duration;
-    uint8_t destination_address[6];
-    uint8_t source_address[6];
-    uint8_t bss_id[6];
-    uint16_t fragment_sequence_number; // 한꺼번에
-};
-
-// probe 프레임 구조체
-struct probe_frame{
-    uint8_t probe_frame;
-    uint8_t flags;
-    uint16_t duration;
-    uint8_t destination_address[6];
-    uint8_t source_address[6];
-    uint8_t bss_id[6];
-    uint16_t fragment_sequence_number; // 한꺼번에
-};
-
-
-typedef struct{
-    uint8_t tag_number;
-    uint8_t tag_length;
-    uint8_t ssid[];
-
-} Tag_SSID;
-
-typedef struct{
-    uint8_t tag_number;
-    uint8_t tag_length;
-    uint8_t rates[];
-    // supported rates가 가변길이여서 뒤는 length 보고 결정된다. 여기랑 extended에서 최댓값 구해야함 
-
-} Tag_Supported_Rates;
-
-typedef struct{
-    uint8_t tag_number;
-    uint8_t tag_length;
-    uint8_t channel;
-
-} Tag_DS;
-typedef struct{
-    uint8_t tag_number;
-    uint8_t tag_length;
-    uint16_t rsn_version;
-    uint32_t group_cipher; // 그룹 암호화 알고리즘
-    uint16_t pairwise_cipher_count; // 페어와이즈 암호화 알고리즘의 수
-}Tag_RSN_Information_Front;
-
-// 전반부와 후반부를 나눈 이유는 가변길이가 중간에 하나 섞이기 때문이다.
-
-typedef struct{
-    uint32_t * pairwise_cipher_list; // 페어와이즈 암호화 알고리즘 리스트(가변길이)
-    uint16_t auth_key_mngt_count; // 인증 방법의 수
-} Tag_RSN_Information_Middle;
-
-typedef struct{
-    uint32_t * auth_key_mngt_list; // 인증 방법 리스트(가변길이)
-    uint16_t rsn_capabilities; // RSN 능력
-} Tag_RSN_Information_Back;
-
-typedef struct{
-    uint8_t tag_number;
-    uint8_t tag_length;
-    uint8_t rates[];
-    // supported rates가 가변길이여서 뒤는 length 보고 결정된다. 여기랑 extended에서 최댓값 구해야함 
-
-} Tag_Extended_Supported_Rates;
-
-typedef struct{
-    uint8_t tag_number;
-    uint8_t tag_length;
-    uint8_t DTIM_count;
-    uint8_t DTIM_period;
-    uint8_t bitmap;
-    uint8_t virtual_bitmap[]; // 가변
-} Tag_Traffic_Indication_Map;
-
-typedef struct{
-    uint8_t tag_number;
-    uint8_t tag_length;
-    uint8_t erp_information;
-} Tag_ERP_Information;
-
-// wireless management 구조체
-struct wireless_management{
-    uint8_t fixed_parameter[12];
-    Tag_SSID SSID;
-    Tag_Supported_Rates Rates;
-    Tag_DS DS;
-    Tag_Traffic_Indication_Map TIM;
-    Tag_ERP_Information ERP_INFO;
-    Tag_Extended_Supported_Rates E_Rates;
-    uint8_t ht_capabilities[28]; //고정
-    uint8_t ht_information[24]; //고정
-    Tag_RSN_Information_Front r_f;
-    Tag_RSN_Information_Middle r_m;
-    Tag_RSN_Information_Back r_b;
-
-};
-
-// 비콘 여부 판별
+// 프레임 종류 판별
 int process_packet(const struct pcap_pkthdr *header, const u_char *packet) {
     struct radiotap_header *radio_hdr = (struct radiotap_header *)packet;
     uint16_t radiotap_header_length = radio_hdr->len;
@@ -198,18 +67,13 @@ int getFieldLength(uint32_t presentFlags, int field) {
 }
 
 
-
 int find_signal_strength(const struct pcap_pkthdr *header, const u_char *packet) {
     struct radiotap_header *radio_hdr = (struct radiotap_header *)packet;
     int offset = radio_hdr->len;
     int target=0;
     int signal_strength = 0;
-    /*
-    first_present = ((first_present >> 24) & 0x000000ff) | ((first_present >> 8) & 0x0000ff00) |
-              ((first_present << 8) & 0x00ff0000) | ((first_present << 24) & 0xff000000);
-    printf("firstaddress 0x%x\n", first_present);
-    */
     int num=1;
+
     while(1){
         uint32_t first_present = *(uint32_t *)(packet + (4*num));
         printf("original present %x\n", first_present);
@@ -240,9 +104,7 @@ void find_bssid(const struct pcap_pkthdr *header, const u_char *packet, uint8_t 
     struct beacon_frame *beacon_fr = (struct beacon_frame *)(packet+offset);
     
     printf("beaconframe %x\n", beacon_fr->beacon_frame);
-    memcpy(bssid, beacon_fr->bss_id, 6);  // 변경된 부분
-    
-    
+    memcpy(bssid, beacon_fr->bss_id, 6);
     
     for(int i=0; i<=5; i++){
         printf("%02x", bssid[i]);
@@ -301,24 +163,15 @@ uint8_t * find_wireless_static(const struct pcap_pkthdr *header, const u_char *p
     int offset = radio_hdr->len;
     
     struct wireless_management *wl_mg = (struct wireless_management *)(packet + offset + 24); // 24는 비콘프레임의 fix값
-    // printf("wireless version: %x\n",wl_mg->version);
+
     Tag_SSID * SSID = &(wl_mg->SSID);
     uint8_t *ssid = SSID->ssid;
     *ssid_length = SSID->tag_length;
-    /*
-    printf("ssid:");
-    for(int i=0; i<ssid_length; i++){
-        printf("%c", ssid[i]);
-
-    }
-    printf("\n");
-    */
 
     return ssid;
 }
 
-
-
+/* Security 파트
 char* print_cipher_type(uint32_t cipher){
     char* cipher_str;
     switch(cipher){
@@ -346,7 +199,7 @@ char* print_auth_type(uint32_t auth){
     return auth_str;
 }
 
-/*
+
 void change_Mb_type(uint32_t mb){
     switch(mb){
         case 0x82: printf("1mb\n"); break;
@@ -366,7 +219,6 @@ void change_Mb_type(uint32_t mb){
     }
 }
 
-//최대값 출력 함수 -> MB찾는거에 쓰임
 int findMax(uint8_t *arr, int n) {
     int max = arr[0]; // 배열의 첫 번째 요소를 최대값으로 초기화
     for (int i = 1; i < n; i++) {
@@ -377,7 +229,7 @@ int findMax(uint8_t *arr, int n) {
     return max; // 배열에서 찾은 최대값을 반환
 }
 
-*/
+
 
 
 //RSN필드 여부 판별(Security 관련)
@@ -394,29 +246,6 @@ int Is_RSN(const struct pcap_pkthdr *header, const u_char *packet, uint8_t *wire
     }
 }
 
-
-uint8_t find_wireless_dynamic(const struct pcap_pkthdr *header, const u_char *packet) 
-{
-    struct radiotap_header *radio_hdr = (struct radiotap_header *)packet;
-    int offset = radio_hdr->len;
-
-    uint8_t *wireless_tagged_frame = (uint8_t *)(packet + offset + 24 + 12);
-    Tag_SSID * ssid = (Tag_SSID *)wireless_tagged_frame;
-    wireless_tagged_frame += (2 + ssid->tag_length);
-
-    Tag_Supported_Rates * rates = (Tag_Supported_Rates *)wireless_tagged_frame;
-    int supported_rates_length = rates->tag_length;
-    uint8_t *new_array = (uint8_t *)malloc(supported_rates_length * sizeof(uint8_t));
-    memcpy(new_array, rates->rates, supported_rates_length * sizeof(uint8_t));
-
-    
-    wireless_tagged_frame += (2 + rates->tag_length);
-
-    Tag_DS * ds = (Tag_DS *)wireless_tagged_frame;
-    uint8_t channel = ds->channel;
-    printf("channel: %x\n", channel);
-    return channel;
-}
 
 // security 정보 출력
 uint8_t find_wireless_dynamic2(const struct pcap_pkthdr *header, const u_char *packet) 
@@ -491,30 +320,39 @@ uint8_t find_wireless_dynamic2(const struct pcap_pkthdr *header, const u_char *p
     }
     
     }
-    /*
-    Tag_SSID * SSID = &(wl_mg->SSID);
-    uint8_t *ssid = SSID->ssid;
-    int ssid_length = SSID->tag_length;
-    printf("ssid:");
-    for(int i=0; i<ssid_length; i++){
-        printf("%c", ssid[i]);
-
-    }
-    printf("\n");
-    
-    wireless_tagged_frame += (2 + rsn->tag_length);
-    */
-
 
 }
+*/
 
+uint8_t find_wireless_dynamic(const struct pcap_pkthdr *header, const u_char *packet) 
+{
+    struct radiotap_header *radio_hdr = (struct radiotap_header *)packet;
+    int offset = radio_hdr->len;
 
+    uint8_t *wireless_tagged_frame = (uint8_t *)(packet + offset + 24 + 12);
+    Tag_SSID * ssid = (Tag_SSID *)wireless_tagged_frame;
+    wireless_tagged_frame += (2 + ssid->tag_length);
 
+    Tag_Supported_Rates * rates = (Tag_Supported_Rates *)wireless_tagged_frame;
+    int supported_rates_length = rates->tag_length;
+    uint8_t *new_array = (uint8_t *)malloc(supported_rates_length * sizeof(uint8_t));
+    memcpy(new_array, rates->rates, supported_rates_length * sizeof(uint8_t));
+
+    
+    wireless_tagged_frame += (2 + rates->tag_length);
+
+    Tag_DS * ds = (Tag_DS *)wireless_tagged_frame;
+    uint8_t channel = ds->channel;
+    printf("channel: %x\n", channel);
+    return channel;
+}
+
+// 각 파트의 프라이머리키를 보고 같은지 판별해줌
 int check_same_elements(uint8_t * bssid1, uint8_t * bssid2, int size) {
     return memcmp(bssid1, bssid2, size);
 }
 
-
+// 출력함수
 void printData(struct airodump_beacon *wlan_data, int start_num, struct airodump_probe *wlan_data1, int start_num2) {
     system("clear"); // 화면 클리어
     printf("BSSID             PWR  Beacons  CH   ESSID\n");
@@ -543,6 +381,7 @@ void printData(struct airodump_beacon *wlan_data, int start_num, struct airodump
     }
 }
 
+// 채널 옮기기 위한 함수
 void set_channel(char *interface, int channel) {
     char command[100];
 
@@ -550,6 +389,7 @@ void set_channel(char *interface, int channel) {
     system(command);
 }
 
+// 모니터 모드 자동 실행
 void start_monitor_mode(char *interface) {
     char command[100];
 
@@ -557,6 +397,7 @@ void start_monitor_mode(char *interface) {
     system(command);
 }
 
+// main함수
 int main(int argc, char *argv[]) {
     char errbuf[PCAP_ERRBUF_SIZE];
     pcap_t *handle;
@@ -570,51 +411,43 @@ int main(int argc, char *argv[]) {
     int current_channel = 1; // 시작 채널
     const int max_channel = 11; // 최대 채널 번호
 
-    while(1){
+    struct airodump_beacon * wlan_data=NULL; // 0으로 초기화
+        // struct airodump_beacon * wlan_data=malloc(sizeof(struct airodump_beacon));
+        // int size = sizeof(wlan_data) /sizeof(wlan_data[0]);
 
+    int wlan_data_size = 0; // 추가: 할당된 배열의 크기를 추적하는 변수
+    struct airodump_probe * wlan_data1=NULL; // 0으로 초기화
+        // struct airodump_probe * wlan_data1=malloc(sizeof(struct airodump_probe));
+        // int size1 = sizeof(wlan_data1) /sizeof(wlan_data1[0]);
+
+    int wlan_data_size2 = 0; // 추가: 할당된 배열의 크기를 추적하는 변수
+    int start_num=0;
+    int start_num2=0;
+    
+    while (1) {
         set_channel(argv[1], current_channel);
         // 사용자가 지정한 네트워크 인터페이스 열기
-        // handle = pcap_open_offline("dot11-sample.pcap", errbuf); // 현재 디렉터리의 "test_beacon.pcap" 파일 열기
+        //handle = pcap_open_offline("dot11-sample.pcap", errbuf); // 현재 디렉터리의 "test_beacon.pcap" 파일 열기
+        
         handle = pcap_open_live(argv[1], BUFSIZ, 1, 1000, errbuf);
         if (handle == NULL) {
             fprintf(stderr, "Couldn't open file 'test_beacon.pcapng': %s\n", errbuf);
             return 2;
         }
-
-        struct airodump_beacon * wlan_data=NULL; // 0으로 초기화
-        // struct airodump_beacon * wlan_data=malloc(sizeof(struct airodump_beacon));
-        // int size = sizeof(wlan_data) /sizeof(wlan_data[0]);
-
-        int wlan_data_size = 0; // 추가: 할당된 배열의 크기를 추적하는 변수
-        struct airodump_probe * wlan_data1=NULL; // 0으로 초기화
-        // struct airodump_probe * wlan_data1=malloc(sizeof(struct airodump_probe));
-        // int size1 = sizeof(wlan_data1) /sizeof(wlan_data1[0]);
-
-        int wlan_data_size2 = 0; // 추가: 할당된 배열의 크기를 추적하는 변수
-        int start_num=0;
-        int start_num2=0;
-    
-        while (1) {
-            const u_char *packet;
-            struct pcap_pkthdr *header;
-            int res = pcap_next_ex(handle, &header, &packet);
+        const u_char *packet;
+        struct pcap_pkthdr *header;
+        int res = pcap_next_ex(handle, &header, &packet);
+        
         if (res == 0)
             continue; // 타임아웃 발생
         if (res == -1 || res == -2) {
             fprintf(stderr, "End of pcap file or  pcap_next_ex failed: %s\n", pcap_geterr(handle));
+            pcap_close(handle);
             break;
         }
 
         int IS_beacon = process_packet(header, packet);
         if (IS_beacon==1) {
-            /*
-            wlan_data = realloc(wlan_data, (wlan_data_size) * sizeof(struct airodump_beacon));
-            wlan_data_size +=1;
-            if (!wlan_data) {
-                fprintf(stderr, "메모리 재할당 실패\n");
-                exit(1);
-            }
-            */
             struct airodump_beacon *temp_wlan_data = realloc(wlan_data, (wlan_data_size+1) * sizeof(struct airodump_beacon));
             
             if (!temp_wlan_data) {
@@ -782,8 +615,8 @@ int main(int argc, char *argv[]) {
 
     printData(wlan_data, start_num, wlan_data1, start_num2);
 
-    }
-
+    
+    /*
     for (int i = 0; i < start_num; i++) {
         if (wlan_data[i].ESSID != NULL) {
             free(wlan_data[i].ESSID);
@@ -805,6 +638,7 @@ int main(int argc, char *argv[]) {
         free(wlan_data1);
         wlan_data1 = NULL;
     }
+    */
     pcap_close(handle);
 
     current_channel++;
@@ -813,5 +647,19 @@ int main(int argc, char *argv[]) {
     }
     sleep(1);
     }
+    for (int i = 0; i < start_num; i++) {
+        if (wlan_data[i].ESSID != NULL) {
+            free(wlan_data[i].ESSID);
+        }
+    }
+    free(wlan_data);
+
+    for (int i = 0; i < start_num2; i++) {
+        if (wlan_data1[i].PROBE != NULL) {
+            free(wlan_data1[i].PROBE);
+        }
+    }
+    free(wlan_data1);
+
     return 0;
 }
