@@ -411,12 +411,12 @@ int main(int argc, char *argv[]) {
     int current_channel = 1; // 시작 채널
     const int max_channel = 11; // 최대 채널 번호
 
-    struct airodump_beacon * wlan_data=NULL; // 0으로 초기화
+    struct airodump_beacon * wlan_data=NULL; // NULL로 초기화
         // struct airodump_beacon * wlan_data=malloc(sizeof(struct airodump_beacon));
         // int size = sizeof(wlan_data) /sizeof(wlan_data[0]);
 
     int wlan_data_size = 0; // 추가: 할당된 배열의 크기를 추적하는 변수
-    struct airodump_probe * wlan_data1=NULL; // 0으로 초기화
+    struct airodump_probe * wlan_data1=NULL; // NULL로 초기화
         // struct airodump_probe * wlan_data1=malloc(sizeof(struct airodump_probe));
         // int size1 = sizeof(wlan_data1) /sizeof(wlan_data1[0]);
 
@@ -448,6 +448,8 @@ int main(int argc, char *argv[]) {
 
         int IS_beacon = process_packet(header, packet);
         if (IS_beacon==1) {
+
+            // 동적으로 배열 늘리기 위한 realloc
             struct airodump_beacon *temp_wlan_data = realloc(wlan_data, (wlan_data_size+1) * sizeof(struct airodump_beacon));
             
             if (!temp_wlan_data) {
@@ -512,7 +514,7 @@ int main(int argc, char *argv[]) {
                     wlan_data[start_num].BEACONS= 1;
                     wlan_data[start_num].CH=channel;
                     if(wlan_data[start_num].ESSID != NULL) { // 추가
-                        free(wlan_data[start_num].ESSID); // 기존 ESSID 해제
+                        free(wlan_data[start_num].ESSID); // 기존 ESSID 해제하고 새로운거로 업데이트위함(가변)
                         wlan_data[start_num].ESSID = NULL;
                     }
                     wlan_data[start_num].ESSID = (uint8_t*)malloc(ssid_length + 1);
@@ -529,15 +531,8 @@ int main(int argc, char *argv[]) {
         }
 
         else if(IS_beacon==2 || IS_beacon==3)
-        {
-            /*
-            wlan_data1 = realloc(wlan_data1, (wlan_data_size2) * sizeof(struct airodump_probe));
-            wlan_data_size2 +=1;
-            if (!wlan_data1) {
-                fprintf(stderr, "메모리 재할당 실패\n");
-                exit(1);
-            }*/
-            
+        {   
+            // 동적으로배열 늘리기 위한 realloc
             struct airodump_probe *temp_wlan_data2 = realloc(wlan_data1, (wlan_data_size2+1) * sizeof(struct airodump_probe));
             if (!temp_wlan_data2) {
                 fprintf(stderr, "메모리 재할당 실패\n");
@@ -575,7 +570,7 @@ int main(int argc, char *argv[]) {
                     wlan_data1[i].PWR = pwr;
                     wlan_data1[i].Frames+=1;
                     if(wlan_data1[i].PROBE != NULL) {
-                        free(wlan_data1[i].PROBE); // 기존 PROBE 해제
+                        free(wlan_data1[i].PROBE); // 기존 PROBE 해제하고 새로운거로 업데이트위함(가변)
                         wlan_data1[i].PROBE = NULL;
                     }
                     wlan_data1[i].PROBE = (uint8_t*)malloc(probe_length + 1);
@@ -598,7 +593,7 @@ int main(int argc, char *argv[]) {
                     wlan_data1[start_num2].PWR = pwr;
                     wlan_data1[start_num2].Frames= 1;
                     if(wlan_data1[start_num2].PROBE != NULL) { 
-                        free(wlan_data1[start_num2].PROBE); // 기존 PROBE 해제
+                        free(wlan_data1[start_num2].PROBE); // 기존 PROBE 해제하고 새로운거로 업데이트위함(가변)
                         wlan_data1[start_num2].PROBE = NULL;
                     }
                     wlan_data1[start_num2].PROBE = (uint8_t*)malloc(probe_length + 1);
@@ -615,34 +610,10 @@ int main(int argc, char *argv[]) {
 
     printData(wlan_data, start_num, wlan_data1, start_num2);
 
-    
-    /*
-    for (int i = 0; i < start_num; i++) {
-        if (wlan_data[i].ESSID != NULL) {
-            free(wlan_data[i].ESSID);
-            wlan_data[i].ESSID = NULL;
-        }
-    }
-    if (wlan_data != NULL) {
-        free(wlan_data);
-        wlan_data = NULL;
-    }
-
-    for (int i = 0; i < start_num2; i++) {
-        if (wlan_data1[i].PROBE != NULL) {
-        free(wlan_data1[i].PROBE);
-        wlan_data1[i].PROBE = NULL;
-    }
-    }
-    if (wlan_data1 != NULL) {
-        free(wlan_data1);
-        wlan_data1 = NULL;
-    }
-    */
     pcap_close(handle);
 
     current_channel++;
-    if (current_channel > 13) { // 대부분의 지역에서 사용 가능한 와이파이 채널은 1~13번입니다.
+    if (current_channel > 13) { // 대부분의 지역에서 사용 가능한 와이파이 채널은 1~13번
             current_channel = 1;
     }
     sleep(1);
@@ -652,14 +623,19 @@ int main(int argc, char *argv[]) {
             free(wlan_data[i].ESSID);
         }
     }
-    free(wlan_data);
-
+    if (wlan_data!= NULL)
+    {
+        free(wlan_data);
+    }
     for (int i = 0; i < start_num2; i++) {
         if (wlan_data1[i].PROBE != NULL) {
             free(wlan_data1[i].PROBE);
         }
     }
-    free(wlan_data1);
+    if (wlan_data1!= NULL)
+    {
+        free(wlan_data1);
+    }
 
     return 0;
 }
